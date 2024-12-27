@@ -3,7 +3,6 @@ import numpy as np
 import time
 
 def calculate_optical_flow(prev_frame, current_frame):
-    """Basic optical flow calculation"""
     flow = cv2.calcOpticalFlowFarneback(
         prev_frame,
         current_frame,
@@ -19,13 +18,12 @@ def calculate_optical_flow(prev_frame, current_frame):
     return flow
 
 def warp_frame(frame, flow, x_offset):
-    """Simple frame warping"""
     h, w = frame.shape[:2]
     map_x, map_y = np.meshgrid(np.arange(w), np.arange(h))
     
-    # Basic flow adjustment
-    flow_x = flow[:, :, 0].copy() - x_offset
-    flow_y = flow[:, :, 1].copy()
+    # Apply temporal filtering to flow
+    flow_x = cv2.bilateralFilter(flow[:, :, 0], 9, 75, 75) - x_offset
+    flow_y = cv2.bilateralFilter(flow[:, :, 1], 9, 75, 75)
     
     map_x = (map_x + flow_x).astype(np.float32)
     map_y = (map_y + flow_y).astype(np.float32)
@@ -36,7 +34,6 @@ def warp_frame(frame, flow, x_offset):
     return warped_frame
 
 def estimate_overlap(flow, frame1, frame2, overlap_width, prev_x_offset=None):
-    """Basic overlap estimation"""
     h, w = flow.shape[:2]
     
     # Use center region for flow estimation
@@ -46,9 +43,9 @@ def estimate_overlap(flow, frame1, frame2, overlap_width, prev_x_offset=None):
     # Calculate x_offset
     x_offset = int((w / 2) + median_flow - (overlap_width / 2))
     
-    # Simple temporal smoothing
+    # Enhanced temporal smoothing
     if prev_x_offset is not None:
-        x_offset = int(0.7 * prev_x_offset + 0.3 * x_offset)
+        x_offset = int(0.85 * prev_x_offset + 0.15 * x_offset)
     
     # Ensure minimum overlap
     min_overlap = int(w * 0.3)
@@ -56,12 +53,24 @@ def estimate_overlap(flow, frame1, frame2, overlap_width, prev_x_offset=None):
     
     return x_offset, overlap_width, flow
 
-def create_simple_mask(height, width):
-    """Creates a simple linear blending mask"""
-    return np.linspace(0, 1, width)[np.newaxis, :].repeat(height, axis=0)
+def create_seamless_mask(height, width):
+    # Create a cosine-based mask for smoother transitions
+    x = np.linspace(0, np.pi, width)
+    mask = (1 - np.cos(x)) / 2
+    return mask[np.newaxis, :].repeat(height, axis=0)
+
+def reduce_ghosts(frame1_overlap, warped_overlap, threshold=30):
+    # Calculate difference between frames
+    diff = cv2.absdiff(frame1_overlap, warped_overlap)
+    diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    
+    # Create ghost mask
+    ghost_mask = (diff_gray > threshold).astype(np.float32)
+    ghost_mask = cv2.GaussianBlur(ghost_mask, (5, 5), 0)
+    
+    return ghost_mask[:, :, np.newaxis]
 
 def blend_frames(frame1, warped_frame2, x_offset, overlap_width):
-    """Simple frame blending"""
     h, w = frame1.shape[:2]
     stitched_width = max(w, x_offset + warped_frame2.shape[1])
     stitched_frame = np.zeros((h, stitched_width, 3), dtype=np.uint8)
@@ -70,10 +79,7 @@ def blend_frames(frame1, warped_frame2, x_offset, overlap_width):
     overlap_start = w - overlap_width
     overlap_end = w
     
-    # Create blending mask
-    blend_mask = create_simple_mask(h, overlap_width)[:, :, np.newaxis]
-    
-    # Extract and blend overlap regions
+    # Extract overlap regions
     frame1_overlap = frame1[:, overlap_start:overlap_end]
     warped_overlap = warped_frame2[:, w - overlap_width - x_offset:w - x_offset]
     
@@ -81,10 +87,18 @@ def blend_frames(frame1, warped_frame2, x_offset, overlap_width):
     min_width = min(frame1_overlap.shape[1], warped_overlap.shape[1])
     frame1_overlap = frame1_overlap[:, :min_width]
     warped_overlap = warped_overlap[:, :min_width]
-    blend_mask = blend_mask[:, :min_width]
     
-    blended = (frame1_overlap * (1 - blend_mask) + 
-              warped_overlap * blend_mask).astype(np.uint8)
+    # Create blending masks
+    blend_mask = create_seamless_mask(h, min_width)
+    ghost_mask = reduce_ghosts(frame1_overlap, warped_overlap)
+    
+    # Combine masks
+    final_mask = blend_mask[:, :, np.newaxis] * (1 - 0.7 * ghost_mask)
+    final_mask = np.clip(final_mask, 0.1, 0.9)
+    
+    # Blend frames
+    blended = (frame1_overlap * (1 - final_mask) + 
+              warped_overlap * final_mask).astype(np.uint8)
     
     # Construct final frame
     stitched_frame[:, :overlap_start] = frame1[:, :overlap_start]
@@ -128,7 +142,7 @@ def main():
     fps = 0
     frame_count = 0
     fps_start_time = time.time()
-    fps_update_interval = 0.5  # Update FPS every 0.5 seconds
+    fps_update_interval = 0.5
     
     while True:
         frame_start_time = time.time()
@@ -162,19 +176,18 @@ def main():
             frame_count = 0
             fps_start_time = time.time()
         
-        # Draw FPS and resolution on frame
+        # Draw stats
         font = cv2.FONT_HERSHEY_SIMPLEX
-        fps_color = (0, 255, 0)  # Green color
-        cv2.putText(stitched_frame, f"FPS: {fps}", (10, 30), font, 0.7, fps_color, 2, cv2.LINE_AA)
+        cv2.putText(stitched_frame, f"FPS: {fps}", (10, 30), font, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
         cv2.putText(stitched_frame, f"Resolution: {stitched_frame.shape[1]}x{stitched_frame.shape[0]}", 
-                    (10, 60), font, 0.7, fps_color, 2, cv2.LINE_AA)
+                    (10, 60), font, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
         
         # Display result
         cv2.imshow("Stitched Video", stitched_frame)
         
         # Frame rate control
         frame_time = time.time() - frame_start_time
-        wait_time = max(1, int(1000/30 - frame_time*1000))  # Target 30 FPS
+        wait_time = max(1, int(1000/30 - frame_time*1000))
         if cv2.waitKey(wait_time) & 0xFF == ord('q'):
             break
     
