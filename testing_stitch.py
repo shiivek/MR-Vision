@@ -2,19 +2,42 @@ import cv2
 import numpy as np
 import time
 
-# Constants
+# Constants (keep original constants)
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 TARGET_FPS = 30
-OVERLAP_RATIO = 0.25  # 25% overlap for stitching
-OUTPUT_WIDTH = 1024  # Increased output width
+OVERLAP_RATIO = 0.25
+OUTPUT_WIDTH = 1024
+
+def detect_objects(frame):
+    # Convert to grayscale for detection
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Create HOG detector
+    hog = cv2.HOGDescriptor()
+    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    
+    # Detect objects
+    boxes, weights = hog.detectMultiScale(frame, 
+                                        winStride=(8, 8),
+                                        padding=(8, 8),
+                                        scale=1.05)
+    
+    # Draw boxes
+    for (x, y, w, h) in boxes:
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    
+    return frame
 
 def blend_frames(left_frame, right_frame):
+    # Keep original blending code
     h, w = left_frame.shape[:2]
-    
-    # Create wider frame for stitching (about 1.75x original width)
     stitched_width = int(w * 1.75)
     stitched = np.zeros((h, stitched_width, 3), dtype=np.uint8)
+    
+    # Apply object detection to individual frames before blending
+    left_frame = detect_objects(left_frame)
+    right_frame = detect_objects(right_frame)
     
     # Copy left frame
     stitched[:, :w] = left_frame
@@ -44,6 +67,7 @@ def blend_frames(left_frame, right_frame):
     
     return stitched
 
+# Main function remains the same
 def main():
     left_cam = cv2.VideoCapture(0)
     right_cam = cv2.VideoCapture(1)
@@ -77,11 +101,11 @@ def main():
         left_frame = cv2.resize(left_frame, (FRAME_WIDTH, FRAME_HEIGHT))
         right_frame = cv2.resize(right_frame, (FRAME_WIDTH, FRAME_HEIGHT))
         
-        # Apply minimal smoothing to reduce noise
+        # Apply minimal smoothing
         left_frame = cv2.GaussianBlur(left_frame, (3, 3), 0)
         right_frame = cv2.GaussianBlur(right_frame, (3, 3), 0)
         
-        # Stitch frames
+        # Stitch frames (now includes object detection)
         stitched_frame = blend_frames(left_frame, right_frame)
         
         # Temporal smoothing
@@ -106,10 +130,7 @@ def main():
         # Display
         cv2.imshow("Binocular Vision", stitched_frame)
         
-        # Frame rate control
-        frame_time = time.time() - frame_start_time
-        wait_time = max(1, int(1000/TARGET_FPS - frame_time*1000))
-        if cv2.waitKey(wait_time) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     
     left_cam.release()
