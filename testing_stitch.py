@@ -23,9 +23,22 @@ def detect_objects(frame):
                                         padding=(8, 8),
                                         scale=1.05)
     
-    # Draw boxes
-    for (x, y, w, h) in boxes:
+    # Draw boxes and labels
+    for i, (x, y, w, h) in enumerate(boxes):
+        # Draw rectangle
         cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        
+        # Add confidence score label
+        confidence = weights[i] if len(weights) > i else 0
+        label = f"Person {i+1}: {confidence:.2f}"
+        
+        # Draw label background
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        cv2.rectangle(frame, (x, y-20), (x + label_size[0], y), (0, 255, 0), -1)
+        
+        # Draw label text
+        cv2.putText(frame, label, (x, y-5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
     
     return frame
 
