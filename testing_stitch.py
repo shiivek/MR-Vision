@@ -101,8 +101,8 @@ def blend_frames(frame1, warped_frame2, x_offset, overlap_width):
     return stitched_frame
 
 def main():
-    cap1 = cv2.VideoCapture(1)
-    cap2 = cv2.VideoCapture(0)
+    cap1 = cv2.VideoCapture(0)
+    cap2 = cv2.VideoCapture(1)
     
     if not cap1.isOpened() or not cap2.isOpened():
         print("Error: Could not open cameras")
