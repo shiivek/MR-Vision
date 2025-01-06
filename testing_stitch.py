@@ -7,12 +7,12 @@ def calculate_optical_flow(prev_frame, current_frame):
         prev_frame,
         current_frame,
         None,
-        pyr_scale=0.5,
-        levels=3,
-        winsize=15,
-        iterations=3,
-        poly_n=5,
-        poly_sigma=1.2,
+        pyr_scale=0.5,  # Pyramid scale for multi-scale processing
+        levels=3,       # Number of pyramid layers
+        winsize=15,     # Window size for flow calculation
+        iterations=3,   # Number of iterations
+        poly_n=5,       # Polynomial size
+        poly_sigma=1.2, # Gaussian smoothing parameter
         flags=0
     )
     return flow
@@ -115,8 +115,8 @@ def blend_frames(frame1, warped_frame2, x_offset, overlap_width):
     return stitched_frame
 
 def main():
-    cap1 = cv2.VideoCapture(1)
-    cap2 = cv2.VideoCapture(0)
+    cap1 = cv2.VideoCapture(0)
+    cap2 = cv2.VideoCapture(1)
     
     if not cap1.isOpened() or not cap2.isOpened():
         print("Error: Could not open cameras")
