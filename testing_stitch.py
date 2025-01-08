@@ -54,7 +54,11 @@ def detect_people(frame, net, output_layers):
                 centers.append((center_x, center_y))
     
     # Apply stricter Non-Maximum Suppression
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.7, 0.3)  # Increased NMS threshold from 0.4 to 0.3
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.7, 0.3)
+    
+    # Initialize filtered lists
+    filtered_centers = []
+    filtered_confidences = []
     
     # Draw detections
     if len(indices) > 0:
@@ -64,6 +68,10 @@ def detect_people(frame, net, output_layers):
             center_x, center_y = centers[i]
             confidence = confidences[i]
             
+            # Add to filtered lists
+            filtered_centers.append((center_x, center_y))
+            filtered_confidences.append(confidence)
+            
             # Draw bounding box
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             
@@ -71,13 +79,13 @@ def detect_people(frame, net, output_layers):
             cv2.circle(frame, (center_x, center_y), 4, (0, 0, 255), -1)
             
             # Add label with coordinates and confidence
-            label = f"Person {i}: ({center_x},{center_y}) {confidence:.2f}"
+            label = f"Person {len(filtered_centers)-1}: ({center_x},{center_y}) {confidence:.2f}"
             label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             cv2.rectangle(frame, (x, y-20), (x + label_size[0], y), (0, 255, 0), -1)
             cv2.putText(frame, label, (x, y-5),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
     
-    return frame, centers, confidences
+    return frame, filtered_centers, filtered_confidences
 
 def blend_frames(left_frame, right_frame, net, output_layers):
     h, w = left_frame.shape[:2]
@@ -127,8 +135,8 @@ def main():
     # Initialize YOLO
     net, output_layers = init_yolo()
     
-    left_cam = cv2.VideoCapture(0)
-    right_cam = cv2.VideoCapture(1)
+    left_cam = cv2.VideoCapture(1)
+    right_cam = cv2.VideoCapture(0)
     
     if not left_cam.isOpened() or not right_cam.isOpened():
         print("Error: Could not open cameras")
