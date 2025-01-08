@@ -2,58 +2,97 @@ import cv2
 import numpy as np
 import time
 
-# Constants (keep original constants)
+# Constants
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 TARGET_FPS = 30
-OVERLAP_RATIO = 0.25
+OVERLAP_RATIO = 0.15
 OUTPUT_WIDTH = 1024
 
-def detect_objects(frame):
-    # Convert to grayscale for detection
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+# Initialize YOLO
+def init_yolo():
+    # Use YOLOv3 instead of v4
+    net = cv2.dnn.readNet("yolov3.weights", "yolov3.cfg")
+    layer_names = net.getLayerNames()
+    output_layers = [layer_names[i-1] for i in net.getUnconnectedOutLayers()]
+    return net, output_layers
+
+def detect_people(frame, net, output_layers):
+    height, width = frame.shape[:2]
     
-    # Create HOG detector
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    # Prepare image for YOLO
+    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+    net.setInput(blob)
     
     # Detect objects
-    boxes, weights = hog.detectMultiScale(frame, 
-                                        winStride=(8, 8),
-                                        padding=(8, 8),
-                                        scale=1.05)
+    outputs = net.forward(output_layers)
     
-    # Draw boxes and labels
-    for i, (x, y, w, h) in enumerate(boxes):
-        # Draw rectangle
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        
-        # Add confidence score label
-        confidence = weights[i] if len(weights) > i else 0
-        label = f"Person {i+1}: {confidence:.2f}"
-        
-        # Draw label background
-        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-        cv2.rectangle(frame, (x, y-20), (x + label_size[0], y), (0, 255, 0), -1)
-        
-        # Draw label text
-        cv2.putText(frame, label, (x, y-5),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+    # Initialize lists
+    boxes = []
+    confidences = []
+    centers = []
     
-    return frame
+    # Process detections
+    for output in outputs:
+        for detection in output:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            
+            # Filter for people (class 0) with confidence > 0.5
+            if class_id == 0 and confidence > 0.5:
+                # Scale bounding box coordinates back to image size
+                center_x = int(detection[0] * width)
+                center_y = int(detection[1] * height)
+                w = int(detection[2] * width)
+                h = int(detection[3] * height)
+                
+                # Rectangle coordinates
+                x = int(center_x - w/2)
+                y = int(center_y - h/2)
+                
+                boxes.append([x, y, w, h])
+                confidences.append(float(confidence))
+                centers.append((center_x, center_y))
+    
+    # Apply non-maximum suppression
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+    
+    # Draw detections
+    if len(indices) > 0:
+        indices = indices.flatten()
+        for i in indices:
+            x, y, w, h = boxes[i]
+            center_x, center_y = centers[i]
+            confidence = confidences[i]
+            
+            # Draw bounding box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            
+            # Draw center point
+            cv2.circle(frame, (center_x, center_y), 4, (0, 0, 255), -1)
+            
+            # Add label with coordinates and confidence
+            label = f"Person {i}: ({center_x},{center_y}) {confidence:.2f}"
+            
+            # Draw label background
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+            cv2.rectangle(frame, (x, y-20), (x + label_size[0], y), (0, 255, 0), -1)
+            
+            # Draw label
+            cv2.putText(frame, label, (x, y-5),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+    
+    return frame, centers, confidences
 
-def blend_frames(left_frame, right_frame):
-    # Keep original blending code
+def blend_frames(left_frame, right_frame, net, output_layers):
     h, w = left_frame.shape[:2]
-    stitched_width = int(w * 1.75)
+    stitched_width = int(w * 2 - (w * OVERLAP_RATIO))
     stitched = np.zeros((h, stitched_width, 3), dtype=np.uint8)
     
-    # Apply object detection to individual frames before blending
-    left_frame = detect_objects(left_frame)
-    right_frame = detect_objects(right_frame)
-    
-    # Copy left frame
-    stitched[:, :w] = left_frame
+    # Apply person detection
+    left_frame, left_centers, left_conf = detect_people(left_frame, net, output_layers)
+    right_frame, right_centers, right_conf = detect_people(right_frame, net, output_layers)
     
     # Calculate overlap region
     overlap_width = int(w * OVERLAP_RATIO)
@@ -64,24 +103,43 @@ def blend_frames(left_frame, right_frame):
     mask = mask.reshape(1, -1, 1)
     mask = np.tile(mask, (h, 1, 3))
     
-    # Blend overlap region
+    # Get overlap regions
     left_overlap = left_frame[:, -overlap_width:]
     right_overlap = right_frame[:, :overlap_width]
+    
+    # Blend overlap region
     blended = (left_overlap * (1 - mask) + right_overlap * mask).astype(np.uint8)
     
-    # Copy right frame and blended region
+    # Copy frames and blended region
+    stitched[:, :w] = left_frame
     stitched[:, right_start:right_start+overlap_width] = blended
-    stitched[:, right_start+overlap_width:right_start+w] = right_frame[:, overlap_width:]
+    stitched[:, right_start+overlap_width:] = right_frame[:, overlap_width:]
     
-    # Resize to desired output width while maintaining aspect ratio
+    # Add detected coordinates to the stitched image
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    y_offset = 90  # Start below resolution text
+    
+    for i, (center, conf) in enumerate(zip(left_centers, left_conf)):
+        text = f"Left Frame Person {i}: ({center[0]},{center[1]}) {conf:.2f}"
+        cv2.putText(stitched, text, (10, y_offset + i*20), font, 0.5, (0, 255, 0), 1)
+    
+    for i, (center, conf) in enumerate(zip(right_centers, right_conf)):
+        # Adjust x-coordinate for right frame
+        adjusted_x = center[0] + right_start
+        text = f"Right Frame Person {i}: ({adjusted_x},{center[1]}) {conf:.2f}"
+        cv2.putText(stitched, text, (10, y_offset + (len(left_centers) + i)*20), font, 0.5, (0, 255, 0), 1)
+    
+    # Resize to desired output width
     aspect_ratio = stitched_width / h
     target_height = int(OUTPUT_WIDTH / aspect_ratio)
     stitched = cv2.resize(stitched, (OUTPUT_WIDTH, target_height))
     
     return stitched
 
-# Main function remains the same
 def main():
+    # Initialize YOLO
+    net, output_layers = init_yolo()
+    
     left_cam = cv2.VideoCapture(0)
     right_cam = cv2.VideoCapture(1)
     
@@ -102,8 +160,6 @@ def main():
     prev_stitched = None
     
     while True:
-        frame_start_time = time.time()
-        
         ret_left, left_frame = left_cam.read()
         ret_right, right_frame = right_cam.read()
         
@@ -118,13 +174,8 @@ def main():
         left_frame = cv2.GaussianBlur(left_frame, (3, 3), 0)
         right_frame = cv2.GaussianBlur(right_frame, (3, 3), 0)
         
-        # Stitch frames (now includes object detection)
-        stitched_frame = blend_frames(left_frame, right_frame)
-        
-        # Temporal smoothing
-        if prev_stitched is not None:
-            stitched_frame = cv2.addWeighted(prev_stitched, 0.3, stitched_frame, 0.7, 0)
-        prev_stitched = stitched_frame.copy()
+        # Stitch frames with person detection
+        stitched_frame = blend_frames(left_frame, right_frame, net, output_layers)
         
         # Calculate FPS
         frame_count += 1
@@ -136,9 +187,9 @@ def main():
         
         # Draw stats
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(stitched_frame, f"FPS: {fps}", (10, 30), font, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(stitched_frame, f"FPS: {fps}", (10, 30), font, 0.7, (0, 255, 0), 2)
         cv2.putText(stitched_frame, f"Resolution: {stitched_frame.shape[1]}x{stitched_frame.shape[0]}", 
-                    (10, 60), font, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                    (10, 60), font, 0.7, (0, 255, 0), 2)
         
         # Display
         cv2.imshow("Binocular Vision", stitched_frame)
