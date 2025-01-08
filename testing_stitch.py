@@ -39,15 +39,13 @@ def detect_people(frame, net, output_layers):
             class_id = np.argmax(scores)
             confidence = scores[class_id]
             
-            # Filter for people (class 0) with confidence > 0.5
-            if class_id == 0 and confidence > 0.5:
-                # Scale bounding box coordinates back to image size
+            # Increase confidence threshold to 0.7 (from 0.5)
+            if class_id == 0 and confidence > 0.7:
                 center_x = int(detection[0] * width)
                 center_y = int(detection[1] * height)
                 w = int(detection[2] * width)
                 h = int(detection[3] * height)
                 
-                # Rectangle coordinates
                 x = int(center_x - w/2)
                 y = int(center_y - h/2)
                 
@@ -55,8 +53,8 @@ def detect_people(frame, net, output_layers):
                 confidences.append(float(confidence))
                 centers.append((center_x, center_y))
     
-    # Apply non-maximum suppression
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+    # Apply stricter Non-Maximum Suppression
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.7, 0.3)  # Increased NMS threshold from 0.4 to 0.3
     
     # Draw detections
     if len(indices) > 0:
@@ -74,12 +72,8 @@ def detect_people(frame, net, output_layers):
             
             # Add label with coordinates and confidence
             label = f"Person {i}: ({center_x},{center_y}) {confidence:.2f}"
-            
-            # Draw label background
             label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
             cv2.rectangle(frame, (x, y-20), (x + label_size[0], y), (0, 255, 0), -1)
-            
-            # Draw label
             cv2.putText(frame, label, (x, y-5),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
     
@@ -90,11 +84,7 @@ def blend_frames(left_frame, right_frame, net, output_layers):
     stitched_width = int(w * 2 - (w * OVERLAP_RATIO))
     stitched = np.zeros((h, stitched_width, 3), dtype=np.uint8)
     
-    # Apply person detection
-    left_frame, left_centers, left_conf = detect_people(left_frame, net, output_layers)
-    right_frame, right_centers, right_conf = detect_people(right_frame, net, output_layers)
-    
-    # Calculate overlap region
+    # First do the blending without detection
     overlap_width = int(w * OVERLAP_RATIO)
     right_start = w - overlap_width
     
@@ -115,24 +105,21 @@ def blend_frames(left_frame, right_frame, net, output_layers):
     stitched[:, right_start:right_start+overlap_width] = blended
     stitched[:, right_start+overlap_width:] = right_frame[:, overlap_width:]
     
-    # Add detected coordinates to the stitched image
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    y_offset = 90  # Start below resolution text
-    
-    for i, (center, conf) in enumerate(zip(left_centers, left_conf)):
-        text = f"Left Frame Person {i}: ({center[0]},{center[1]}) {conf:.2f}"
-        cv2.putText(stitched, text, (10, y_offset + i*20), font, 0.5, (0, 255, 0), 1)
-    
-    for i, (center, conf) in enumerate(zip(right_centers, right_conf)):
-        # Adjust x-coordinate for right frame
-        adjusted_x = center[0] + right_start
-        text = f"Right Frame Person {i}: ({adjusted_x},{center[1]}) {conf:.2f}"
-        cv2.putText(stitched, text, (10, y_offset + (len(left_centers) + i)*20), font, 0.5, (0, 255, 0), 1)
-    
     # Resize to desired output width
     aspect_ratio = stitched_width / h
     target_height = int(OUTPUT_WIDTH / aspect_ratio)
     stitched = cv2.resize(stitched, (OUTPUT_WIDTH, target_height))
+    
+    # Now apply detection on the stitched image
+    stitched, centers, confidences = detect_people(stitched, net, output_layers)
+    
+    # Add detected coordinates
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    y_offset = 90  # Start below resolution text
+    
+    for i, (center, conf) in enumerate(zip(centers, confidences)):
+        text = f"Person {i}: ({center[0]},{center[1]}) {conf:.2f}"
+        cv2.putText(stitched, text, (10, y_offset + i*20), font, 0.5, (0, 255, 0), 1)
     
     return stitched
 
